@@ -2,68 +2,70 @@ pragma solidity ^0.4.24;
 
 contract button {
     using SafeMath for *;
+    uint256 launchTime; // ? to be decided
     uint256 countdown_cap = 43200; //12 h countdown cap
     uint256 countdown_increase_step = 120; //Increase 2 minutes per share when pressed
     uint256 round_interval = 600; //10 minutes between each round
     
     uint256 shares_for_first_press = 10000; //10000 means 1 share
-    uint256 referrer_percent = 5;
-    uint256 referee_percent = 5;
-    uint256 dev_fee_percent = 2;
+    // uint256 referrer_percent = 5;
+    // uint256 referee_percent = 5;
+    // uint256 dev_fee_percent = 2;
     uint256 last_player_reward_percent = 5;
     
-    uint256 lastPID = 0;
-    uint256 public RID;    // round ID => total # of rounds
+    uint256 lastPID = 0;    // current max player ID => total # of player
+    uint256 public RID;    // current round ID => total # of rounds
     
     Player[] players;
     
     mapping (uint256 => Round) public rounds;   // rID => round data
     mapping (address => uint256) public addrToPID; // addr => PID
-    mapping (uint256 => Player) public IDToPlayers;   // PID => player dataayers
+    mapping (uint256 => Player) public PIDToPlayers;   // PID => player dataayers
     mapping (uint256 => mapping (uint256 => PlayerRounds)) public playerRounds;
    
     struct Player{
+        uint256 PID;
         address account;
+        // uint256 shares;
+        // uint256 lastPressShare;
+        // uint256 lastPressInfo;
+        // uint256 lastPressRemainingTime;
+        uint256 winning;
+    }
+    
+    struct PlayerRound {
+        uint256 PID;
+        // address account;
         uint256 shares;
         uint256 lastPressShare;
         uint256 lastPressInfo;
         uint256 lastPressRemainingTime;
+        uint256 eth;    // eth player has added to round (used for eth limiter)
+        uint256 keys;   // keys
     }
     
-    // struct PlayerRound {
-    //     uint256 PID;
-    //     address account;
-    //     uint256 shares;
-    //     uint256 lastPressShare;
-    //     uint256 lastPressInfo;
-    //     uint256 lastPressRemainingTime;
-    //     uint256 eth;    // eth player has added to round (used for eth limiter)
-    //     uint256 keys;   // keys
-    // }
-    
     struct Round{
-        uint256 id;
+        uint256 RID;
         uint256 round;
         uint256 lastPressedShares;
-        uint256 shares;
+        // uint256 shares;   //??
         uint256 totalShares;
         uint256 pot;
         uint256 nextRoundReserved;
-        uint256 dev_fee;
+        // uint256 dev_fee;
         address lastPressedPlayer;
         uint256 start;
-        uint256 end;
+        // uint256 end;
         uint256 lastPressedTime;
         uint256 lastPressRemainingTime;
-        bool hasEnded;
+        // bool hasEnded;
     }
     
     // fired whenever a withdraw forces end round to be ran
     event Withdraw
     (
         address playerAddress,
-        bytes32 playerName,
-        uint256 ethOut
+        uint256 amount
         );
     
     event distributes(
@@ -90,10 +92,10 @@ contract button {
         
     }
     
-    function press(address account, uint256 amount, uint256 roundID) checkBoundaries(amount) private {
-        Round game = rounds[roundID]
+    function press(address account, uint256 quantity, uint256 roundID) checkBoundaries(amount) private {
+        Round game = rounds[roundID];
         uint256 remaining_time_right_after_last_full_press;
-        uint256 addup = games.lastPressedRemainingTime.add(countdown_increase_step.mul(games.lastPressedshares).div(10000));
+        uint256 addup = game.lastPressRemainingTime.add(countdown_increase_step.mul(game.lastPressedShares).div(10000));
         if(countdown_cap < addup){
             remaining_time_right_after_last_full_press = countdown_cap;
         }
@@ -101,46 +103,38 @@ contract button {
             remaining_time_right_after_last_full_press = addup;
         }
         
-        
-        if (now() >= s_add(game.last_full_press_time, remaining_time_right_after_last_full_press)) {
-        //print("Round ended or not started |");
-        if (now() >= s_add(s_add(game.last_full_press_time, remaining_time_right_after_last_full_press), round_interval)) {
-            //print("Start a new round |");
+        // 2 scenarios: last round has ended; you are still in a round
+        /////////////////
+        if (now >= game.lastPressedTime.add(remaining_time_right_after_last_full_press)) {
+        //Round ended or not started
+        if (now >= game.lastPressedTime.add(remaining_time_right_after_last_full_press).add(round_interval)) {
+            //Start a new round !
 
             //Transfer rewards to players
             //Run this logic no matter the pot is 0 or not. If it is 0, it doesn't mean there is no player (if there is only one press last round, the pot is 0).
-            for (uint256 i=0;i<players.length;i++) {
-                //Calculate the reward. No need to use safe math, because the asset type will check for overflow/underflow. The order is important, the assets must be at the beginning. Make sure the uint64_t won't be rounded to 0.
+            for (uint256 i = 0; i < players.length; i++) {
+                //Calculate the reward
                 uint256 last_round_reward;
                 Player p = players[i];
-                //string ebt_transfer_memo;
-                if (p.account != game.last_full_press_player) {
-                    last_round_reward = game.pot * (100 - last_player_reward_percent) / 100 * p.shares / game.shares;
-                    //ebt_transfer_memo = string("eosbutton.io - Reward (") + std::to_string(itr->shares/10000) + string(" Share(s))");
+
+                if (p.account != game.lastPressedPlayer) {
+                    //normal player reward
+                    last_round_reward = (game.pot).mul(100.sub(last_player_reward_percent)).div(100).mul(p.shares).div(game.shares);
                 } else {
-                    last_round_reward = game.pot * (100 - last_player_reward_percent) / 100 * p.shares / game.shares + games.pot * (last_player_reward_percent) / 100;
-                    //ebt_transfer_memo = string("eosbutton.io - Reward (") + std::to_string(itr->shares/10000) + string(" Share(s) and the FINAL PRIZE)");
+                    //last hit player reward
+                    last_round_reward = (game.pot).mul(100.sub(last_player_reward_percent)).div(100).mul(p.shares).div(game.shares + games.pot * (last_player_reward_percent) / 100;
                 }
-                if (p.account != _self && is_account(itr->account) && last_round_reward.amount > 0) {
-                    if (quantity.symbol == string_to_symbol(4, "EBT")) {
-                        //print("rewarding EBT |");
-                        /*
-                        ctransfer(
-                            _self,
-                            itr->account,
-                            last_round_reward,
-                            ebt_transfer_memo,
-                            account
-                        );
-                        */
+                if (last_round_reward.amount > 0) {
+                    // uodate player info, round player info
+                    
                         mtransfer(
                             _self,
                             itr->account,
                             last_round_reward,
                             account
                         );
-                    } else {
-                        //print("rewarding EOS |");
+                   
+                        //rewarding EOS
                         accstates accstates_table( _self, _self );
                         auto accstates_itr = accstates_table.find(itr->account);
                         if (accstates_itr == accstates_table.end()) {
@@ -153,87 +147,54 @@ contract button {
                                 a.eos_balance = a.eos_balance + last_round_reward;
                             });
                         }
+                    
+                    //Transfered last round reward to p.account
                     }
-                    //print("Transfered last round reward ", last_round_reward, " to ", N(itr->account), " |");
-                }
-                itr = players_table.erase(itr);
+                //erase p? nah
             }
             
-            if (now() < launchTime) {
+            if (now < launchTime) {
                 return;
             }
-            //Emplace player's record (no need to check if it exists, because players have been erased previously)
-            players_table.emplace(account, [&](auto& p){
-                p.account = account;
-                /*
-                p.shares = s_add(shares_for_first_press, additional_shares_for_referee);
-                p.last_press_shares = s_add(shares_for_first_press, additional_shares_for_referee);
-                */
-                p.shares = shares_for_first_press;
-                p.last_press_shares = shares_for_first_press;
-                p.last_press_info = 2;
-                p.last_press_remaining_time = 0;
-            });
+            // //Emplace player's record 
+            // players_table.emplace(account, [&](auto& p){
+            //     p.account = account;
+            //     p.shares = shares_for_first_press;
+            //     p.last_press_shares = shares_for_first_press;
+            //     p.last_press_info = 2;
+            //     p.last_press_remaining_time = 0;
+            // });
 
             //Set initial values for a new round
-            games_table.modify(games_itr, account, [&](auto& g){
-                /*
-                if (game_command == 2) {
-                    g.round = 1;
-                } else {
-                    g.round = s_add(g.round, 1);
-                }
-                */
-                g.round = s_add(g.round, 1);
-                /*
-                g.last_full_press_shares = s_add(shares_for_first_press, additional_shares_for_referee);
-                g.shares = s_add(s_add(shares_for_first_press, additional_shares_for_referrer), additional_shares_for_referee);
-                g.total_shares = s_add(s_add(s_add(g.total_shares, shares_for_first_press), additional_shares_for_referrer), additional_shares_for_referee);
-                */
-                g.last_full_press_shares = shares_for_first_press;
-                g.shares = shares_for_first_press;
-                g.total_shares = s_add(g.total_shares, shares_for_first_press);
-                g.pot = g.token_reserved_for_next_round;
-                g.token_reserved_for_next_round = asset(0, quantity.symbol);
-                //g.dev_fee = g.dev_fee; //The first press is free
-                g.last_full_press_player = account;
-                g.start_time = now();
-                g.last_full_press_time = now();
-                g.last_full_press_remaining_time = 0;
-            });
+            Round memory r = Round{
+                RID: game.RID + 1,
+                round: game.round + 1,
+                lastPressedShares: shares_for_first_press,
+                totalShares: shares_for_first_press,
+                pot: r.nextRoundReserved,
+                nextRoundReserved: 0,
+                lastPressedPlayer: account,
+                start: now,
+                lastPressedTime: now,
+                lastPressRemainingTime: countdown_cap
+            }
+            rounds[r.RID] = r;
+                // g.total_shares = s_add(g.total_shares, shares_for_first_press);  //add up???
+                //dev fee? free for first press
+                // g.last_full_press_remaining_time = 0;    // ??????????????? should be countdown cap
             }
             else {
             //not started yet
             }
         }
+        // Round still active.
         else{
-            //print("Round active |");
-
-            uint256 remaining = remaining_time_right_after_last_full_press.sub(now.sub(games_itr->last_full_press_time));
-    
-            //Handle protection
-            auto players_itr = players_table.find(account);
-            if (
-                (s_sub(now(), games_itr->start_time) <= start_protection_seconds && (s_sub(countdown_cap, remaining) <= start_protection_seconds)) || //Protect players for free at the beginning of a round.
-                (protection && (s_sub(countdown_cap, remaining) <= protection_seconds))
-            ) {
-                if( players_itr == players_table.end() ) {
-                    players_table.emplace(account, [&](auto& p){
-                        p.account = account;
-                        p.last_press_info = 4;
-                    });
-                } else {
-                    players_table.modify(players_itr, account, [&](auto& p){
-                        p.last_press_info = 4;
-                    });
-                }
-                return;
-                }
+            uint256 remaining = remaining_time_right_after_last_full_press.sub(now.sub(game.lastPressedTime));
                     
             uint256 timeElapsedSinceStart = now.sub(games_itr->start_time);
             uint256 shares = quantity.mul(1036800000).div((remaining.power(2).add(2280)).mul(timeElapsedSinceStart.add(86400)));
             //Charge fee
-            //No need to assert to check if the EBT balance is enough, because the sub_balance will do.
+
             //However, if SEND_INLINE_ACTION is used, I must assert here.
             if (quantity.symbol == string_to_symbol(4, "EBT")) {
                 if ( account != _self ) {
@@ -242,35 +203,37 @@ contract button {
                     mtransfer(account, _self, quantity, account);
                 }
             } else {
-                //print("charge EOS |");
-                accstates accstates_table( _self, _self );
-                auto accstates_itr = accstates_table.find(account);
-                eosio_assert(accstates_itr != accstates_table.end(), "unknown account");
-    
-                accstates_table.modify( accstates_itr, 0, [&]( auto& a ) {
-                    eosio_assert( a.eos_balance >= quantity, "insufficient balance" );
-                    a.eos_balance -= quantity;
-                });
+                    //print("charge EOS |");
+                    accstates accstates_table( _self, _self );
+                    auto accstates_itr = accstates_table.find(account);
+                    eosio_assert(accstates_itr != accstates_table.end(), "unknown account");
+        
+                    accstates_table.modify( accstates_itr, 0, [&]( auto& a ) {
+                        eosio_assert( a.eos_balance >= quantity, "insufficient balance" );
+                        a.eos_balance -= quantity;
+                    });
             }
             
-                    //Update shares and check if it is a full press
-        shares = s_add(shares, additional_shares_for_referee);
-        bool full_press = false;
-        if (shares >= 10000) {
-            full_press = true;
-        }
+            //Update shares and check if it is a full press  ???
+            shares = shares.add(additional_shares_for_referee);
+            bool full_press = false;
+            if (shares >= 10000) {
+                    full_press = true;
+            }
 
-        //Update players_table
-        players_itr = players_table.find(account);
-        if( players_itr == players_table.end() ) {
+        //Update player info
+        uint256 pid= AddrToPID[account];
+        //check if player exists
+        if(pid == 0) {
             players_table.emplace(account, [&](auto& p){
                 p.account = account;
                 p.shares = s_add(p.shares, shares);
                 p.last_press_shares = shares;
-                p.last_press_info = 3;
+
                 p.last_press_remaining_time = remaining;
             });
         } else {
+            Player memory p2 = PIDToPlayers[pid];
             players_table.modify(players_itr, account, [&](auto& p){
                 p.shares = s_add(p.shares, shares);
                 p.last_press_shares = shares;
@@ -302,27 +265,27 @@ contract button {
         
     }
     
-    /**
-     * @dev return the price buyer will pay for next 1 individual key.
-     * @return price for next key bought (in wei format)
-     */
-    function getBuyPrice()
-        public 
-        view 
-        returns(uint256)
-    {  
-        // setup local rID
-        uint256 _rID = rID_;
+    // /**
+    //  * @dev return the price buyer will pay for next 1 individual key.
+    //  * @return price for next key bought (in wei format)
+    //  */
+    // function getBuyPrice()
+    //     public 
+    //     view 
+    //     returns(uint256)
+    // {  
+    //     // setup local rID
+    //     uint256 _rID = rID_;
         
-        // grab time
-        uint256 _now = now;
+    //     // grab time
+    //     uint256 _now = now;
         
-        // are we in a round?
-        if (_now > round_[_rID].strt + rndGap_ && (_now <= round_[_rID].end || (_now > round_[_rID].end && round_[_rID].plyr == 0)))
-            return ( (round_[_rID].keys.add(1000000000000000000)).ethRec(1000000000000000000) );
-        else // rounds over.  need price for new round
-            return ( 75000000000000 ); // initial value
-    }
+    //     // are we in a round?
+    //     if (_now > round_[_rID].strt + rndGap_ && (_now <= round_[_rID].end || (_now > round_[_rID].end && round_[_rID].plyr == 0)))
+    //         return ( (round_[_rID].keys.add(1000000000000000000)).ethRec(1000000000000000000) );
+    //     else // rounds over.  need price for new round
+    //         return ( 75000000000000 ); // initial value
+    // }
     
     function earningWithdraw(uint256 _pid) returns (uint256){
         
@@ -391,17 +354,17 @@ contract button {
      * @dev withdraws all of your earnings.
      */
     function withdraw()
-        isActivated()
         public
     {
+        // fetch player ID
+        uint256 _PID = PIDxAddr_[msg.sender];
+        require(_PID != 0);
+        
         // setup local rID 
         uint256 _rID = rID_;
         
         // grab time
         uint256 _now = now;
-        
-        // fetch player ID
-        uint256 _pID = pIDxAddr_[msg.sender];
         
         // setup temp var for player eth
         uint256 _eth;
@@ -450,7 +413,7 @@ contract button {
             
             // gib moni
             if (_eth > 0)
-                plyr_[_pID].addr.transfer(_eth);
+                PIDToPlayers[_pID].addr.transfer(_eth);
             
             // fire withdraw event
             emit F3Devents.onWithdraw(_pID, msg.sender, plyr_[_pID].name, _eth, _now);
@@ -580,4 +543,67 @@ library SafeMath {
             return (z);
         }
     }
+}
+
+
+
+
+//////////////////////////////////////////////////////////////
+void eos_button::claimad( account_name account )
+{
+    //print("claimad - Start |");
+    require_auth( account );
+
+    asset airdrop_claim_quantity = asset(500000000, string_to_symbol(4, "EBT"));
+    time airdrop_claim_interval = 86400;
+    time airdrop_start_time = 1531908000;
+    time airdrop_end_time = 1533117600;
+
+    accstates accstates_table( _self, _self );
+    auto accstates_itr = accstates_table.find(account);
+    /*
+    systemstates systemstates_table( _self, _self );
+    auto systemstates_itr = systemstates_table.find(0);
+    eosio_assert(systemstates_itr != systemstates_table.end(), "No airdrop");
+    eosio_assert(systemstates_itr->airdrop_available >= systemstates_itr->airdrop_claim_quantity, "Airdrop unavailable");
+    eosio_assert(now() >= systemstates_itr->airdrop_start_time, "Airdrop has not started");
+    eosio_assert(now() < systemstates_itr->airdrop_end_time, "Airdrop is ended");
+    */
+    eosio_assert(now() >= airdrop_start_time, "Airdrop has not started");
+    eosio_assert(now() < airdrop_end_time, "Airdrop is ended");
+
+    if(accstates_itr != accstates_table.end()) {
+        //eosio_assert( now() >= accstates_itr->last_airdrop_claim_time + systemstates_itr->airdrop_claim_interval, "claim is too frequent");
+        eosio_assert( now() >= accstates_itr->last_airdrop_claim_time + airdrop_claim_interval, "claim is too frequent");
+    }
+
+    //Update last_airdrop_claim_time
+    if( accstates_itr == accstates_table.end() ) {
+        //print("itr == end |");
+        accstates_table.emplace(account, [&](auto& a){
+            a.account = account;
+            a.last_airdrop_claim_time = now();
+            a.eos_balance = asset(0, string_to_symbol(4, "EOS"));
+        });
+    } else {
+        //print("itr != end |");
+        accstates_table.modify(accstates_itr, account, [&](auto& a){
+            a.account = account;
+            a.last_airdrop_claim_time = now();
+        });
+    }
+
+    //Update available airdrop
+    /*
+    systemstates_table.modify(systemstates_itr, account, [&](auto& a){
+        a.airdrop_available = a.airdrop_available - a.airdrop_claim_quantity;
+    });
+    */
+
+    //Issue
+    //cissue(account, systemstates_itr->airdrop_claim_quantity, "eosbutton.io - Airdrop");
+    //Use mtransfer to replace cissue
+    mtransfer(_self, account, airdrop_claim_quantity, account);
+
+    //print("claimad - End |");
 }
