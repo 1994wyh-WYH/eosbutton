@@ -1,64 +1,71 @@
 pragma solidity ^0.4.24;
 
-contract button {
+contract button is Ownable {
     using SafeMath for *;
+    
+    uint256 initAKeyPrice = 10000000000000000; // 0.18% up per new key
+    uint256 initBKeyPrice = 10000000000000000; // 0.18% down per new key
+    uint256 lastAKeyPrice;
+    uint256 lastBKeyPrice;
+    
     uint256 launchTime; // ? to be decided
     uint256 countdown_cap = 43200; //12 h countdown cap
     uint256 countdown_increase_step = 120; //Increase 2 minutes per share when pressed
     uint256 round_interval = 600; //10 minutes between each round
     
     uint256 shares_for_first_press = 10000; //10000 means 1 share
-    // uint256 referrer_percent = 5;
-    // uint256 referee_percent = 5;
-    // uint256 dev_fee_percent = 2;
-    uint256 last_player_reward_percent = 5;
+
+    uint256 BRewardPercent = 40;
+    uint256 reservedPercent = 10;
+    uint256 ARewardPercent = 40;
+    uint256 lastPlayerPercent = 10;
     
     uint256 lastPID = 0;    // current max player ID => total # of player
-    uint256 public RID;    // current round ID => total # of rounds
+    uint256 public currRID;    // current round ID => total # of rounds
     
-    Player[] players;
+    uint256[] latePlayers; // players eligible for B rewards. arr index => PID
     
     mapping (uint256 => Round) public rounds;   // rID => round data
     mapping (address => uint256) public addrToPID; // addr => PID
-    mapping (uint256 => Player) public PIDToPlayers;   // PID => player dataayers
-    mapping (uint256 => mapping (uint256 => PlayerRounds)) public playerRounds;
+    mapping (uint256 => Player) public PIDToPlayers;   // PID => player data
+    // mapping (uint256 => mapping (uint256 => PlayerRounds)) public playerRounds;
    
     struct Player{
-        uint256 PID;
+        uint256 PID; // if new, assign and update last PID;
         address account;
-        // uint256 shares;
-        // uint256 lastPressShare;
-        // uint256 lastPressInfo;
-        // uint256 lastPressRemainingTime;
-        uint256 winning;
+        uint256 AShares;
+        uint256 BShares;
+        uint256 lastPressAShares; //needed?
+        uint256 lastPressBShares; //needed?
+        uint256 lastPressTime;
+        uint256 AEarning;
+        uint256 BEarning;
     }
     
-    struct PlayerRound {
-        uint256 PID;
-        // address account;
-        uint256 shares;
-        uint256 lastPressShare;
-        uint256 lastPressInfo;
-        uint256 lastPressRemainingTime;
-        uint256 eth;    // eth player has added to round (used for eth limiter)
-        uint256 keys;   // keys
-    }
+    // struct PlayerRound {
+    //     uint256 PID;
+    //     // address account;
+    //     uint256 shares;
+    //     uint256 lastPressShare;
+    //     uint256 lastPressInfo;
+    //     uint256 lastPressRemainingTime;
+    //     uint256 eth;    // eth player has added to round (used for eth limiter)
+    //     uint256 keys;   // keys
+    // }
     
     struct Round{
         uint256 RID;
-        uint256 round;
-        uint256 lastPressedShares;
-        // uint256 shares;   //??
-        uint256 totalShares;
+        // uint256 lastPressedShares;  ??
+        uint256 totalAShares;
+        uint256 totalBShares;
         uint256 pot;
-        uint256 nextRoundReserved;
+        // uint256 nextRoundReserved;  ??
         // uint256 dev_fee;
-        address lastPressedPlayer;
+        // address lastPressedPlayer;
         uint256 start;
-        // uint256 end;
-        uint256 lastPressedTime;
+        uint256 end;
+        uint256 lastPressTime;
         uint256 lastPressRemainingTime;
-        // bool hasEnded;
     }
     
     // fired whenever a withdraw forces end round to be ran
@@ -80,21 +87,49 @@ contract button {
         );
     
     /**
-     * @dev sets boundaries for incoming tx 
+     * @dev sets boundaries for incoming eth in wei 
      */
-    modifier checkBoundaries(uint256 _eth) {
-        require(_eth >= 1000000000);
-        require(_eth <= 10000000000000000000000);
+    modifier checkBoundaries(uint256 amount) {
+        require(amount >= 1000000000);
+        require(amount <= 100000000000000000000000);
         _;    
     }
     
     constructor() public {
-        
+        lastAKeyPrice = 10000000000000000;
+        lastBKeyPrice = 10000000000000000;
     }
     
-    function press(address account, uint256 quantity, uint256 roundID) checkBoundaries(amount) private {
-        Round game = rounds[roundID];
+    /**
+     * @dev for checking if a game has ended.
+     */
+    function isCurrRoundEnded() public view return(bool) {
+        return now >= rounds[currRID].end;
+    }
+    
+    /**
+     * @dev calculates the number of A keys given amount of eth
+     */
+     function AKeysOf(uint256 _quantity) public view returns (uint256) {
+         
+     }
+     
+    /**
+     * @dev calculates the number of B keys given amount of eth
+     */
+     function BKeysOf(uint256 _quantity) public view returns (uint256) {
+    
+     }
+         
+    
+    /**
+     * @dev core buy-key logic
+     */
+    function press(address _account, uint256 _quantity) checkBoundaries(_quantity) public onlyOwner {
+        
+        Round game = rounds[RID];
         uint256 remaining_time_right_after_last_full_press;
+        // TODO: need to modify!!!
         uint256 addup = game.lastPressRemainingTime.add(countdown_increase_step.mul(game.lastPressedShares).div(10000));
         if(countdown_cap < addup){
             remaining_time_right_after_last_full_press = countdown_cap;
@@ -103,164 +138,171 @@ contract button {
             remaining_time_right_after_last_full_press = addup;
         }
         
+        // for consistency
+        uint256 _now = now;
+        
         // 2 scenarios: last round has ended; you are still in a round
         /////////////////
-        if (now >= game.lastPressedTime.add(remaining_time_right_after_last_full_press)) {
+        // if (_now >= game.lastPressedTime.add(remaining_time_right_after_last_full_press)) {
+        if(isCurrRoundEnded()){
         //Round ended or not started
-        if (now >= game.lastPressedTime.add(remaining_time_right_after_last_full_press).add(round_interval)) {
+        
+        //foundation withdraw
+        withdraw(pot.mul(reservedPercent).div(100));
+        
+        if (_now >= game.lastPressedTime.add(remaining_time_right_after_last_full_press).add(round_interval)) {
             //Start a new round !
 
-            //Transfer rewards to players
+            //Transfer B rewards to players
             //Run this logic no matter the pot is 0 or not. If it is 0, it doesn't mean there is no player (if there is only one press last round, the pot is 0).
-            for (uint256 i = 0; i < players.length; i++) {
+            for (uint256 i = 1; i <= latePlayers.length; i++) {
                 //Calculate the reward
                 uint256 last_round_reward;
-                Player p = players[i];
+                Player p = latePlayers[i];
 
-                if (p.account != game.lastPressedPlayer) {
-                    //normal player reward
-                    last_round_reward = (game.pot).mul(100.sub(last_player_reward_percent)).div(100).mul(p.shares).div(game.shares);
-                } else {
-                    //last hit player reward
-                    last_round_reward = (game.pot).mul(100.sub(last_player_reward_percent)).div(100).mul(p.shares).div(game.shares + games.pot * (last_player_reward_percent) / 100;
-                }
+                //normal player B reward
+                last_round_reward = (game.pot).mul(100.sub(ARewardPercent).sub(reservedPercent)).mul(p.BShares).div(game.BShares);
+                
                 if (last_round_reward.amount > 0) {
-                    // uodate player info, round player info
+                    // uodate player info, maybe round player info
                     
-                        mtransfer(
-                            _self,
-                            itr->account,
-                            last_round_reward,
-                            account
-                        );
+                    // payPlayer, player withdraw
+                    // clear B shares
                    
-                        //rewarding EOS
-                        accstates accstates_table( _self, _self );
-                        auto accstates_itr = accstates_table.find(itr->account);
-                        if (accstates_itr == accstates_table.end()) {
-                            accstates_table.emplace( account, [&]( auto& a ) {
-                                a.account = itr->account;
-                                a.eos_balance = last_round_reward;
-                          });
-                        } else {
-                            accstates_table.modify( accstates_itr, 0, [&]( auto& a ) {
-                                a.eos_balance = a.eos_balance + last_round_reward;
-                            });
-                        }
+                        //rewarding 
+                        // accstates accstates_table( _self, _self );
+                        // auto accstates_itr = accstates_table.find(itr->account);
+                        // if (accstates_itr == accstates_table.end()) {
+                        //     accstates_table.emplace( account, [&]( auto& a ) {
+                        //         a.account = itr->account;
+                        //         a.eos_balance = last_round_reward;
+                        //   });
+                        // } else {
+                        //     accstates_table.modify( accstates_itr, 0, [&]( auto& a ) {
+                        //         a.eos_balance = a.eos_balance + last_round_reward;
+                        //     });
+                        // }
                     
                     //Transfered last round reward to p.account
                     }
                 //erase p? nah
             }
             
-            if (now < launchTime) {
-                return;
-            }
-            // //Emplace player's record 
+            // ??????????
+            // if (now < launchTime) {
+            //     return;
+            // }
+            
+            // //Emplace this pressed player's A shares record, shares_for_first_press
+            // press valid, maybe
+            Player memory thisP = PIDToPlayers[addrToPID[_account]];
+            thisP.AShares = ;
+            
+            // TODO: pay this player
+            payPlayer(thisP.PID, "A");
+            
             // players_table.emplace(account, [&](auto& p){
             //     p.account = account;
             //     p.shares = shares_for_first_press;
             //     p.last_press_shares = shares_for_first_press;
-            //     p.last_press_info = 2;
             //     p.last_press_remaining_time = 0;
             // });
 
             //Set initial values for a new round
-            Round memory r = Round{
-                RID: game.RID + 1,
-                round: game.round + 1,
-                lastPressedShares: shares_for_first_press,
-                totalShares: shares_for_first_press,
+            Round memory r = Round({
+                RID: currRID + 1,
+                totalAShares: shares_for_first_press,
+                totalBShares: 0,
                 pot: r.nextRoundReserved,
                 nextRoundReserved: 0,
-                lastPressedPlayer: account,
-                start: now,
-                lastPressedTime: now,
+                start: _now,
+                end: _now + countdown_cap,
+                lastPressTime: _now,
                 lastPressRemainingTime: countdown_cap
-            }
+            });
+            currRID++;
             rounds[r.RID] = r;
                 // g.total_shares = s_add(g.total_shares, shares_for_first_press);  //add up???
-                //dev fee? free for first press
                 // g.last_full_press_remaining_time = 0;    // ??????????????? should be countdown cap
             }
+            
+            // next round not started yet
             else {
-            //not started yet
+            // do nothing, for now
             }
+            
         }
         // Round still active.
         else{
-            uint256 remaining = remaining_time_right_after_last_full_press.sub(now.sub(game.lastPressedTime));
+            //update end time
+            rounds[currRID].end = (game.lastPressTime).add(remaining_time_right_after_last_full_press);
+            
+            uint256 remaining = remaining_time_right_after_last_full_press.sub(_now.sub(game.lastPressTime));
                     
-            uint256 timeElapsedSinceStart = now.sub(games_itr->start_time);
-            uint256 shares = quantity.mul(1036800000).div((remaining.power(2).add(2280)).mul(timeElapsedSinceStart.add(86400)));
-            //Charge fee
-
-            //However, if SEND_INLINE_ACTION is used, I must assert here.
-            if (quantity.symbol == string_to_symbol(4, "EBT")) {
-                if ( account != _self ) {
-                    //print("charge EBT |");
-                    //ctransfer(account, _self, quantity, string("eosbutton.io - Press"), account);
-                    mtransfer(account, _self, quantity, account);
-                }
-            } else {
-                    //print("charge EOS |");
-                    accstates accstates_table( _self, _self );
-                    auto accstates_itr = accstates_table.find(account);
-                    eosio_assert(accstates_itr != accstates_table.end(), "unknown account");
-        
-                    accstates_table.modify( accstates_itr, 0, [&]( auto& a ) {
-                        eosio_assert( a.eos_balance >= quantity, "insufficient balance" );
-                        a.eos_balance -= quantity;
-                    });
-            }
+            uint256 timeElapsedSinceStart = _now.sub(game.start);
+            // To be modified
+            uint256 shares = _quantity.mul(1036800000).div((remaining.power(2).add(2280)).mul(timeElapsedSinceStart.add(86400)));
+            
+            // TODO: update A reward info 
+            payPlayer(addrToPID[_account], "A");
+            
             
             //Update shares and check if it is a full press  ???
-            shares = shares.add(additional_shares_for_referee);
-            bool full_press = false;
-            if (shares >= 10000) {
-                    full_press = true;
+            // shares = shares.add(additional_shares_for_referee);
+            //full press needed ??
+
+            //Update player info
+            uint256 pid= addrToPID[_account];
+            //check if player exists
+            if(pid == 0) {
+                 //update 
+                Player memory p2 = Player ({
+                    //init default
+                    PID: lastPID; // if new, 
+                    account: _account;
+                    AShares: shares;
+                    BShares: 0;
+                    lastPressAShares: shares;
+                    lastPressBShares: 0;
+                    lastPressTime: _now;
+                    AEarning: ; // TODO: to be decided
+                    BEarning: ; // TODO: to be decided
+                });
+                
+                lastPID ++;
+                
+                // TODO: pay player for A? push to arr
+                
+                
+            } else {
+                Player memory p2 = PIDToPlayers[pid];
+                p2.shares = (p2.shares).add(shares);
+                p2.lastPressShare = shares;
+                p2.lastPressRemainingTime = remaining;
             }
-
-        //Update player info
-        uint256 pid= AddrToPID[account];
-        //check if player exists
-        if(pid == 0) {
-            players_table.emplace(account, [&](auto& p){
-                p.account = account;
-                p.shares = s_add(p.shares, shares);
-                p.last_press_shares = shares;
-
-                p.last_press_remaining_time = remaining;
+            
+            
+            // TODO: update late player list
+    
+            //Update game info
+            //Calculate pot and shares
+            uint256 foundationReserved = quantity.mul(reservedPercent).div(100);
+            
+            games_table.modify(games_itr, account, [&](auto& g){
+                g.shares = s_add(s_add(g.shares, shares), additional_shares_for_referrer);
+                g.total_shares = s_add(s_add(g.total_shares, shares), additional_shares_for_referrer);
+                g.pot = g.pot + quantity - token_reserved_for_next_round - dev_fee;
+                g.token_reserved_for_next_round += token_reserved_for_next_round;
+                g.dev_fee += dev_fee;
+                if (full_press) {
+                    g.last_full_press_shares = shares;
+                    g.last_full_press_player = account;
+                    g.last_full_press_time = now();
+                    g.last_full_press_remaining_time = remaining;
+                }
             });
-        } else {
-            Player memory p2 = PIDToPlayers[pid];
-            players_table.modify(players_itr, account, [&](auto& p){
-                p.shares = s_add(p.shares, shares);
-                p.last_press_shares = shares;
-                p.last_press_info = 3;
-                p.last_press_remaining_time = remaining;
-            });
+
         }
-
-        //Update games_table
-        //Calculate asset. No need to use safe math, because the asset type will check for overflow/underflow. The order is important, the assets must be at the beginning. Make sure the uint64_t won't be rounded to 0.
-        asset token_reserved_for_next_round = quantity * token_reserve_percent / 100;
-        asset dev_fee = quantity * dev_fee_percent / 100;
-        games_table.modify(games_itr, account, [&](auto& g){
-            g.shares = s_add(s_add(g.shares, shares), additional_shares_for_referrer);
-            g.total_shares = s_add(s_add(g.total_shares, shares), additional_shares_for_referrer);
-            g.pot = g.pot + quantity - token_reserved_for_next_round - dev_fee;
-            g.token_reserved_for_next_round += token_reserved_for_next_round;
-            g.dev_fee += dev_fee;
-            if (full_press) {
-                g.last_full_press_shares = shares;
-                g.last_full_press_player = account;
-                g.last_full_press_time = now();
-                g.last_full_press_remaining_time = remaining;
-            }
-        });
-
-    }
 
         
     }
@@ -287,10 +329,10 @@ contract button {
     //         return ( 75000000000000 ); // initial value
     // }
     
-    function earningWithdraw(uint256 _pid) returns (uint256){
-        
-    }
-    
+    /**
+     * @dev Ends current round, starts cooling down 
+     * 
+     */
     function endRound() private returns(){
         //Calculate shares
         uint256 remaining_time_right_after_last_full_press;
@@ -304,7 +346,7 @@ contract button {
         uint256 remaining = remaining_time_right_after_last_full_press.sub(now.sub(games_itr->last_full_press_time));
         uint256 timeElapsedSinceStart = now.sub(games_itr->start_time);
         uint256 shares = quantity.mul(1036800000).div((remaining.power(2).add(2280)).mul(timeElapsedSinceStart.add(86400)));
-/////////////////////////////////////////
+        /////////////////////////////////////////
         // setup local rID
         uint256 _rID = rID_;
         
@@ -351,18 +393,18 @@ contract button {
     }
     
     /**
-     * @dev withdraws all of your earnings.
+     * @dev Pays a player. Transfer specified earnings to the player. Clear balance immediately.
+     * @param _pid, player ID
+     * @param _kind, a string indicating the reward type
+     * 
      */
-    function withdraw()
+    function payPlayer(uint256 _pid, string _kind)
         public
+        onlyOwner
     {
-        // fetch player ID
-        uint256 _PID = PIDxAddr_[msg.sender];
-        require(_PID != 0);
-        
-        // setup local rID 
-        uint256 _rID = rID_;
-        
+        // check player ID
+        require(_pid != 0);
+      
         // grab time
         uint256 _now = now;
         
@@ -463,48 +505,54 @@ contract button {
 }
 
 
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
 library SafeMath {
-    
-    /**
-    * @dev Multiplies two numbers, throws on overflow.
-    */
-    function mul(uint256 a, uint256 b) 
-        internal 
-        pure 
-        returns (uint256 c) 
-    {
+
+      /**
+      * @dev Multiplies two numbers, throws on overflow.
+      */
+      function mul(uint256 a, uint256 b) internal pure returns (uint256 c) {
+        // Gas optimization: this is cheaper than asserting 'a' not being zero, but the
+        // benefit is lost if 'b' is also tested.
+        // See: https://github.com/OpenZeppelin/openzeppelin-solidity/pull/522
         if (a == 0) {
-            return 0;
+          return 0;
         }
+    
         c = a * b;
-        require(c / a == b, "SafeMath mul failed");
+        assert(c / a == b);
         return c;
-    }
-
-    /**
-    * @dev Subtracts two numbers, throws on overflow (i.e. if subtrahend is greater than minuend).
-    */
-    function sub(uint256 a, uint256 b)
-        internal
-        pure
-        returns (uint256) 
-    {
-        require(b <= a, "SafeMath sub failed");
+      }
+    
+      /**
+      * @dev Integer division of two numbers, truncating the quotient.
+      */
+      function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        // uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return a / b;
+      }
+    
+      /**
+      * @dev Subtracts two numbers, throws on overflow (i.e. if subtrahend is greater than minuend).
+      */
+      function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
         return a - b;
-    }
-
-    /**
-    * @dev Adds two numbers, throws on overflow.
-    */
-    function add(uint256 a, uint256 b)
-        internal
-        pure
-        returns (uint256 c) 
-    {
+      }
+    
+      /**
+      * @dev Adds two numbers, throws on overflow.
+      */
+      function add(uint256 a, uint256 b) internal pure returns (uint256 c) {
         c = a + b;
-        require(c >= a, "SafeMath add failed");
+        assert(c >= a);
         return c;
-    }
+      }
     
     /**
      * @dev gives square root of given x.
@@ -545,7 +593,67 @@ library SafeMath {
     }
 }
 
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+  address public owner;
 
+
+  event OwnershipRenounced(address indexed previousOwner);
+  event OwnershipTransferred(
+    address indexed previousOwner,
+    address indexed newOwner
+  );
+
+
+  /**
+   * @dev The Ownable constructor sets the original `owner` of the contract to the sender
+   * account.
+   */
+  constructor() public {
+    owner = msg.sender;
+  }
+
+  /**
+   * @dev Throws if called by any account other than the owner.
+   */
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  /**
+   * @dev Allows the current owner to relinquish control of the contract.
+   * @notice Renouncing to ownership will leave the contract without an owner.
+   * It will not be possible to call the functions with the `onlyOwner`
+   * modifier anymore.
+   */
+  function renounceOwnership() public onlyOwner {
+    emit OwnershipRenounced(owner);
+    owner = address(0);
+  }
+
+  /**
+   * @dev Allows the current owner to transfer control of the contract to a newOwner.
+   * @param _newOwner The address to transfer ownership to.
+   */
+  function transferOwnership(address _newOwner) public onlyOwner {
+    _transferOwnership(_newOwner);
+  }
+
+  /**
+   * @dev Transfers control of the contract to a newOwner.
+   * @param _newOwner The address to transfer ownership to.
+   */
+  function _transferOwnership(address _newOwner) internal {
+    require(_newOwner != address(0));
+    emit OwnershipTransferred(owner, _newOwner);
+    owner = _newOwner;
+  }
+}
 
 
 //////////////////////////////////////////////////////////////
